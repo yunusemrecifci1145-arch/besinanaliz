@@ -12,30 +12,32 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # ==========================================
-# 1. SAYFA VE STİL AYARLARI
+# 1. SAYFA VE STİL AYARLARI (Koyu/Açık Mod Uyumlu)
 # ==========================================
 st.set_page_config(page_title="Klinik Besin Tüketim Analizi", layout="wide", page_icon="🥗")
 
 st.markdown("""
 <style>
+    /* Hem açık hem koyu modda mobil uyumlu footer */
     .footer-box {
-        margin-top: 60px;
-        padding: 20px;
-        border-top: 2px solid #e2e8f0;
-        background-color: #f8fafc;
-        border-radius: 10px;
+        margin-top: 50px;
+        padding: 24px;
+        border-top: 1px solid rgba(128, 128, 128, 0.2);
+        background-color: var(--secondary-background-color);
+        border-radius: 12px;
         text-align: center;
     }
     .footer-name {
-        font-size: 26px;
+        font-size: 24px;
         font-weight: 800;
-        color: #0f172a;
-        margin: 5px 0;
+        color: var(--text-color);
+        margin: 4px 0;
         letter-spacing: 0.5px;
     }
     .footer-desc {
-        font-size: 14px;
-        color: #475569;
+        font-size: 13px;
+        color: var(--text-color);
+        opacity: 0.8;
         margin-bottom: 0px;
     }
 </style>
@@ -166,12 +168,10 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     t_detay_baslik = "Tuketilen Besinler ve Dagilim" if not font_secildi else "Tüketilen Besinler ve Dağılım"
     t_mikro_baslik = "Gunluk Toplam Mikro ve Diger Besin Ogeleri Dokumu" if not font_secildi else "Günlük Toplam Mikro ve Diğer Besin Ögeleri Dökümü"
 
-    # Başlık
     elements.append(Paragraph(t_baslik, title_style))
     elements.append(Paragraph(t_yazar, sub_style))
     elements.append(Spacer(1, 12))
 
-    # 1. Özet & Makro Tablosu
     elements.append(Paragraph(t_ozet_baslik, head_style))
     elements.append(Spacer(1, 5))
 
@@ -190,7 +190,6 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     elements.append(t_ozet)
     elements.append(Spacer(1, 12))
 
-    # 2. Tüketilen Besinler
     elements.append(Paragraph(t_detay_baslik, head_style))
     elements.append(Spacer(1, 5))
 
@@ -221,7 +220,6 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     elements.append(t_detay)
     elements.append(Spacer(1, 12))
 
-    # 3. Mikro Besinler Tablosu (2 Sütunlu Yan Yana Düzen)
     elements.append(Paragraph(t_mikro_baslik, head_style))
     elements.append(Spacer(1, 5))
 
@@ -231,7 +229,6 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
         deg = f"{r['Günlük Ortalama Miktar']}"
         mikro_rows.append((ad, deg))
 
-    # 2'li yan yana döküm
     mikro_tablo_data = [[
         Paragraph("<b>Besin Ögesi</b>", cell_style_bold),
         Paragraph("<b>Miktar</b>", cell_style_bold),
@@ -266,8 +263,8 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
 # 5. EKRAN 1: KARŞILAMA EKRANI
 # ==========================================
 if st.session_state.mod is None:
-    st.markdown("<h1 style='text-align: center; color: #0f172a;'>🥗 Klinik Besin Tüketim Analizi</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #475569; font-size: 16px;'>Diyetisyenler, stajyerler ve beslenme uzmanları için geliştirilmiş hızlı tüketim analizi aracı.</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🥗 Klinik Besin Tüketim Analizi</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; opacity: 0.8; font-size: 16px;'>Diyetisyenler, stajyerler ve beslenme uzmanları için geliştirilmiş hızlı tüketim analizi aracı.</p>", unsafe_allow_html=True)
     st.write("")
 
     col_box1, col_box2, col_box3 = st.columns([1, 4, 1])
@@ -316,34 +313,45 @@ else:
     aktif_gunler = ["Gün 1"] if st.session_state.mod == "1 Günlük" else ["Gün 1", "Gün 2", "Gün 3"]
     secilen_gun = st.radio("Kayıt Yapılacak Günü Seçin:", aktif_gunler, horizontal=True) if st.session_state.mod == "3 Günlük" else "Gün 1"
 
-    besin_listesi = ["Seçiniz..."] + sorted(df[isim_sutunu].tolist())
+    # Arama placeholder'ı güncellendi
+    arama_placeholder = "Seçiniz veya aramak için yazınız..."
+    besin_listesi = [arama_placeholder] + sorted(df[isim_sutunu].tolist())
 
     # Öğün Blokları
     for ogun in ogunler:
         ekli_sayi = len(st.session_state.tuketim[secilen_gun][ogun])
         with st.expander(f"🍽️ {ogun} ({ekli_sayi} besin eklendi)", expanded=False):
-            c_besin, c_tip, c_miktar, c_yuzde, c_btn = st.columns([3, 1.5, 1.2, 1.2, 1])
+            c_besin, c_tip, c_miktar, c_yuzde, c_btn = st.columns([2.8, 1.2, 1.2, 1.8, 0.8])
             
             with c_besin:
-                secilen_besin = st.selectbox("Besin Seç", options=besin_listesi, key=f"secim_{secilen_gun}_{ogun}")
+                secilen_besin = st.selectbox("Besin Ara / Seç", options=besin_listesi, key=f"secim_{secilen_gun}_{ogun}")
             
             with c_tip:
                 tip = st.radio("Ölçü Türü", ["Gram / ml", "Porsiyon"], horizontal=True, key=f"tip_{secilen_gun}_{ogun}")
             
             with c_miktar:
                 if tip == "Porsiyon":
-                    miktar_input = st.number_input("Porsiyon Adedi", min_value=0.25, value=1.0, step=0.25, key=f"pors_{secilen_gun}_{ogun}")
+                    miktar_input = st.number_input("Porsiyon Adedi", min_value=0.1, value=1.0, step=0.25, key=f"pors_{secilen_gun}_{ogun}")
                 else:
                     miktar_input = st.number_input("Miktar (g / ml)", min_value=1.0, value=100.0, step=10.0, key=f"mkt_{secilen_gun}_{ogun}")
 
             with c_yuzde:
-                yuzde = st.select_slider("Tüketim (%)", options=[25, 50, 75, 100], value=100, key=f"yuz_{secilen_gun}_{ogun}")
+                # 1'er adım esnek tüketim slider'ı
+                yuzde = st.slider(
+                    "Tüketim Miktarı (%):",
+                    min_value=5,
+                    max_value=100,
+                    value=100,
+                    step=5,
+                    help="Hastanın tabağında veya porsiyonunda tükettiği oran",
+                    key=f"yuz_{secilen_gun}_{ogun}"
+                )
 
             with c_btn:
                 st.write("")
                 st.write("")
                 if st.button("➕ Ekle", key=f"btn_{secilen_gun}_{ogun}"):
-                    if secilen_besin != "Seçiniz...":
+                    if secilen_besin != arama_placeholder:
                         besin_verisi = df[df[isim_sutunu] == secilen_besin].iloc[0].to_dict()
                         std_porsiyon = besin_verisi.get('Porsiyon (g)', 100.0)
                         
