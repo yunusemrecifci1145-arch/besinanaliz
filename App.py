@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import os
-import urllib.request
 
 # ReportLab ve PDF Kütüphaneleri
 from reportlab.lib.pagesizes import letter
@@ -101,8 +100,25 @@ if "tuketim" not in st.session_state:
     }
 
 # ==========================================
-# 4. YARDIMCI FONKSİYONLAR (EXCEL & TÜRKÇE PDF)
+# 4. YARDIMCI FONKSİYONLAR (EXCEL & PDF)
 # ==========================================
+def tr_fix(text):
+    """PDF'in çökmesini ve harf bozulmasını önleyen güvenli metin dönüştürücü"""
+    if text is None:
+        return ""
+    s = str(text)
+    ceviri = {
+        'ı': 'i', 'İ': 'I',
+        'ş': 's', 'Ş': 'S',
+        'ğ': 'g', 'Ğ': 'G',
+        'ü': 'u', 'Ü': 'U',
+        'ö': 'o', 'Ö': 'O',
+        'ç': 'c', 'Ç': 'C'
+    }
+    for tr, eng in ceviri.items():
+        s = s.replace(tr, eng)
+    return s
+
 def generate_excel(df_data, ozet_dict):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -112,23 +128,27 @@ def generate_excel(df_data, ozet_dict):
     return output.getvalue()
 
 def generate_pdf(hasta_kodu, ozet_dict, df_data):
-    # Türkçe harfleri destekleyen yazı tiplerini internetten otomatik çekiyoruz
-    font_normal = "DejaVuSans.ttf"
-    font_bold = "DejaVuSans-Bold.ttf"
+    # Sistemde kurulu olan Türkçe destekli font kontrolü (Streamlit Cloud Linux yolları)
+    font_secildi = False
+    linux_font_yollari = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
+    ]
     
-    if not os.path.exists(font_normal):
-        urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", font_normal)
-    if not os.path.exists(font_bold):
-        urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", font_bold)
-        
-    try:
-        pdfmetrics.registerFont(TTFont('DejaVuSans', font_normal))
-        pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', font_bold))
-        secilen_font = 'DejaVuSans'
-        secilen_bold = 'DejaVuSans-Bold'
-    except Exception:
-        secilen_font = 'Helvetica'
-        secilen_bold = 'Helvetica-Bold'
+    secilen_font = "Helvetica"
+    secilen_bold = "Helvetica-Bold"
+
+    for font_yolu in linux_font_yollari:
+        if os.path.exists(font_yolu):
+            try:
+                pdfmetrics.registerFont(TTFont('CustomTR', font_yolu))
+                secilen_font = 'CustomTR'
+                secilen_bold = 'CustomTR'
+                font_secildi = True
+                break
+            except Exception:
+                pass
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
@@ -173,14 +193,24 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
         textColor=colors.white
     )
 
-    elements.append(Paragraph("Klinik Besin Tüketim Raporu", title_style))
-    elements.append(Paragraph("Geliştirici: Yunus Emre Çifçi - Beslenme ve Diyetetik", sub_style))
+    t_baslik = "Klinik Besin Tuketim Raporu" if not font_secildi else "Klinik Besin Tüketim Raporu"
+    t_yazar = "Gelistirici: Yunus Emre Cifci - Beslenme ve Diyetetik" if not font_secildi else "Geliştirici: Yunus Emre Çifçi - Beslenme ve Diyetetik"
+    t_ozet_baslik = "Hasta & Degerlendirme Ozeti" if not font_secildi else "Hasta & Değerlendirme Özeti"
+    t_detay_baslik = "Tuketilen Besinler ve Dagilim" if not font_secildi else "Tüketilen Besinler ve Dağılım"
+
+    elements.append(Paragraph(t_baslik, title_style))
+    elements.append(Paragraph(t_yazar, sub_style))
     elements.append(Spacer(1, 15))
 
-    elements.append(Paragraph("Hasta & Değerlendirme Özeti", head_style))
+    elements.append(Paragraph(t_ozet_baslik, head_style))
     elements.append(Spacer(1, 6))
 
-    ozet_table_data = [[Paragraph(k, cell_style), Paragraph(str(v), cell_style)] for k, v in ozet_dict.items()]
+    ozet_table_data = []
+    for k, v in ozet_dict.items():
+        k_metin = k if font_secildi else tr_fix(k)
+        v_metin = str(v) if font_secildi else tr_fix(v)
+        ozet_table_data.append([Paragraph(k_metin, cell_style), Paragraph(v_metin, cell_style)])
+
     t_ozet = Table(ozet_table_data, colWidths=[200, 300])
     t_ozet.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
@@ -190,15 +220,18 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
     elements.append(t_ozet)
     elements.append(Spacer(1, 15))
 
-    elements.append(Paragraph("Tüketilen Besinler ve Dağılım", head_style))
+    elements.append(Paragraph(t_detay_baslik, head_style))
     elements.append(Spacer(1, 6))
 
     temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns]
     
-    # Tablo Başlıkları
-    table_content = [[Paragraph(col, cell_style_bold) for col in temel_kolonlar]]
+    table_content = []
+    baslik_satiri = []
+    for col in temel_kolonlar:
+        c_metin = col if font_secildi else tr_fix(col)
+        baslik_satiri.append(Paragraph(c_metin, cell_style_bold))
+    table_content.append(baslik_satiri)
 
-    # Satırlar
     for _, row in df_data[temel_kolonlar].iterrows():
         row_vals = []
         for col in temel_kolonlar:
@@ -207,7 +240,8 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
                 text_val = f"{val:.1f}"
             else:
                 text_val = str(val)[:24]
-            row_vals.append(Paragraph(text_val, cell_style))
+            final_text = text_val if font_secildi else tr_fix(text_val)
+            row_vals.append(Paragraph(final_text, cell_style))
         table_content.append(row_vals)
 
     col_widths = [50, 70, 180, 70, 70, 60] if 'Gün' in temel_kolonlar else [80, 200, 80, 80, 60]
@@ -277,7 +311,6 @@ else:
 
     st.markdown("---")
 
-    # Gün Seçimi
     aktif_gunler = ["Gün 1"] if st.session_state.mod == "1 Günlük" else ["Gün 1", "Gün 2", "Gün 3"]
     secilen_gun = st.radio("Kayıt Yapılacak Günü Seçin:", aktif_gunler, horizontal=True) if st.session_state.mod == "3 Günlük" else "Gün 1"
 
@@ -371,7 +404,6 @@ else:
         m4.metric("Yağ", f"{toplam_yag:.1f} g")
         m5.metric("Lif", f"{toplam_lif:.1f} g")
 
-        # Makro Yüzdeleri ve Klinik Metrikler
         kcal_cho = toplam_cho * 4
         kcal_prot = toplam_prot * 4
         kcal_yag = toplam_yag * 9
