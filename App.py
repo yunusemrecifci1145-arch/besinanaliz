@@ -103,7 +103,6 @@ if "tuketim" not in st.session_state:
 # 4. YARDIMCI FONKSİYONLAR (EXCEL & PDF)
 # ==========================================
 def tr_fix(text):
-    """PDF'in çökmesini ve harf bozulmasını önleyen güvenli metin dönüştürücü"""
     if text is None:
         return ""
     s = str(text)
@@ -119,16 +118,16 @@ def tr_fix(text):
         s = s.replace(tr, eng)
     return s
 
-def generate_excel(df_data, ozet_dict):
+def generate_excel(df_data, ozet_dict, df_mikro):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_ozet = pd.DataFrame(list(ozet_dict.items()), columns=["Parametre", "Değer"])
         df_ozet.to_excel(writer, sheet_name='Genel Özet', index=False)
         df_data.to_excel(writer, sheet_name='Tüketim Detayı', index=False)
+        df_mikro.to_excel(writer, sheet_name='Mikro Besinler', index=False)
     return output.getvalue()
 
-def generate_pdf(hasta_kodu, ozet_dict, df_data):
-    # Sistemde kurulu olan Türkçe destekli font kontrolü (Streamlit Cloud Linux yolları)
+def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     font_secildi = False
     linux_font_yollari = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -155,55 +154,26 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        fontName=secilen_bold,
-        fontSize=16,
-        leading=20,
-        textColor=colors.HexColor("#0f172a"),
-        alignment=1
-    )
-    sub_style = ParagraphStyle(
-        'SubStyle',
-        fontName=secilen_font,
-        fontSize=9,
-        leading=12,
-        textColor=colors.HexColor("#64748b"),
-        alignment=1
-    )
-    head_style = ParagraphStyle(
-        'HeadStyle',
-        fontName=secilen_bold,
-        fontSize=12,
-        leading=15,
-        textColor=colors.HexColor("#1e293b")
-    )
-    cell_style = ParagraphStyle(
-        'CellStyle',
-        fontName=secilen_font,
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor("#0f172a")
-    )
-    cell_style_bold = ParagraphStyle(
-        'CellStyleBold',
-        fontName=secilen_bold,
-        fontSize=8,
-        leading=10,
-        textColor=colors.white
-    )
+    title_style = ParagraphStyle('TitleStyle', fontName=secilen_bold, fontSize=16, leading=20, textColor=colors.HexColor("#0f172a"), alignment=1)
+    sub_style = ParagraphStyle('SubStyle', fontName=secilen_font, fontSize=9, leading=12, textColor=colors.HexColor("#64748b"), alignment=1)
+    head_style = ParagraphStyle('HeadStyle', fontName=secilen_bold, fontSize=11, leading=14, textColor=colors.HexColor("#1e293b"))
+    cell_style = ParagraphStyle('CellStyle', fontName=secilen_font, fontSize=8, leading=10, textColor=colors.HexColor("#0f172a"))
+    cell_style_bold = ParagraphStyle('CellStyleBold', fontName=secilen_bold, fontSize=8, leading=10, textColor=colors.white)
 
     t_baslik = "Klinik Besin Tuketim Raporu" if not font_secildi else "Klinik Besin Tüketim Raporu"
     t_yazar = "Gelistirici: Yunus Emre Cifci - Beslenme ve Diyetetik" if not font_secildi else "Geliştirici: Yunus Emre Çifçi - Beslenme ve Diyetetik"
-    t_ozet_baslik = "Hasta & Degerlendirme Ozeti" if not font_secildi else "Hasta & Değerlendirme Özeti"
+    t_ozet_baslik = "Hasta & Makro Besin Dagilim Ozeti" if not font_secildi else "Hasta & Makro Besin Dağılım Özeti"
     t_detay_baslik = "Tuketilen Besinler ve Dagilim" if not font_secildi else "Tüketilen Besinler ve Dağılım"
+    t_mikro_baslik = "Gunluk Toplam Mikro ve Diger Besin Ogeleri Dokumu" if not font_secildi else "Günlük Toplam Mikro ve Diğer Besin Ögeleri Dökümü"
 
+    # Başlık
     elements.append(Paragraph(t_baslik, title_style))
     elements.append(Paragraph(t_yazar, sub_style))
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 12))
 
+    # 1. Özet & Makro Tablosu
     elements.append(Paragraph(t_ozet_baslik, head_style))
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 5))
 
     ozet_table_data = []
     for k, v in ozet_dict.items():
@@ -211,20 +181,20 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
         v_metin = str(v) if font_secildi else tr_fix(v)
         ozet_table_data.append([Paragraph(k_metin, cell_style), Paragraph(v_metin, cell_style)])
 
-    t_ozet = Table(ozet_table_data, colWidths=[200, 300])
+    t_ozet = Table(ozet_table_data, colWidths=[220, 280])
     t_ozet.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ('PADDING', (0, 0), (-1, -1), 4),
+        ('PADDING', (0, 0), (-1, -1), 3),
     ]))
     elements.append(t_ozet)
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 12))
 
+    # 2. Tüketilen Besinler
     elements.append(Paragraph(t_detay_baslik, head_style))
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 5))
 
     temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns]
-    
     table_content = []
     baslik_satiri = []
     for col in temel_kolonlar:
@@ -236,10 +206,7 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
         row_vals = []
         for col in temel_kolonlar:
             val = row[col]
-            if isinstance(val, float):
-                text_val = f"{val:.1f}"
-            else:
-                text_val = str(val)[:24]
+            text_val = f"{val:.1f}" if isinstance(val, float) else str(val)[:24]
             final_text = text_val if font_secildi else tr_fix(text_val)
             row_vals.append(Paragraph(final_text, cell_style))
         table_content.append(row_vals)
@@ -252,6 +219,45 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
         ('PADDING', (0, 0), (-1, -1), 3),
     ]))
     elements.append(t_detay)
+    elements.append(Spacer(1, 12))
+
+    # 3. Mikro Besinler Tablosu (2 Sütunlu Yan Yana Düzen)
+    elements.append(Paragraph(t_mikro_baslik, head_style))
+    elements.append(Spacer(1, 5))
+
+    mikro_rows = []
+    for _, r in df_mikro.iterrows():
+        ad = str(r["Besin Ögesi"]) if font_secildi else tr_fix(r["Besin Ögesi"])
+        deg = f"{r['Günlük Ortalama Miktar']}"
+        mikro_rows.append((ad, deg))
+
+    # 2'li yan yana döküm
+    mikro_tablo_data = [[
+        Paragraph("<b>Besin Ögesi</b>", cell_style_bold),
+        Paragraph("<b>Miktar</b>", cell_style_bold),
+        Paragraph("<b>Besin Ögesi</b>", cell_style_bold),
+        Paragraph("<b>Miktar</b>", cell_style_bold)
+    ]]
+
+    yarisi = (len(mikro_rows) + 1) // 2
+    for i in range(yarisi):
+        sol_ad, sol_deg = mikro_rows[i]
+        sag_ad, sag_deg = mikro_rows[i + yarisi] if (i + yarisi) < len(mikro_rows) else ("", "")
+        
+        mikro_tablo_data.append([
+            Paragraph(sol_ad, cell_style),
+            Paragraph(sol_deg, cell_style),
+            Paragraph(sag_ad, cell_style),
+            Paragraph(sag_deg, cell_style)
+        ])
+
+    t_mikro = Table(mikro_tablo_data, colWidths=[170, 80, 170, 80])
+    t_mikro.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#334155")),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ('PADDING', (0, 0), (-1, -1), 2.5),
+    ]))
+    elements.append(t_mikro)
 
     doc.build(elements)
     return buffer.getvalue()
@@ -299,15 +305,11 @@ else:
             st.rerun()
 
     # Hasta Bilgileri
-    col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+    col_h1, col_h2 = st.columns(2)
     with col_h1:
         hasta_no = st.text_input("Hasta No / Ad-Soyad", placeholder="Örn: G-101 / Servis")
     with col_h2:
         agirlik = st.number_input("Ağırlık (kg)", min_value=0.0, value=70.0, step=1.0)
-    with col_h3:
-        hedef_kcal = st.number_input("Hedef Enerji (kcal)", min_value=0.0, value=2000.0, step=50.0)
-    with col_h4:
-        hedef_protein = st.number_input("Hedef Protein (g)", min_value=0.0, value=80.0, step=5.0)
 
     st.markdown("---")
 
@@ -396,7 +398,7 @@ else:
         toplam_yag = df_toplam.get('Yağ (g)', pd.Series([0])).sum() / gun_sayisi
         toplam_lif = df_toplam.get('Lif (g)', pd.Series([0])).sum() / gun_sayisi
 
-        st.subheader("📊 Günlük Ortalama Tüketim & Karşılama")
+        st.subheader("📊 Günlük Ortalama Tüketim & Makro Dağılımı")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Ortalama Enerji", f"{toplam_kcal:.1f} kcal")
         m2.metric("Karbonhidrat", f"{toplam_cho:.1f} g")
@@ -404,39 +406,31 @@ else:
         m4.metric("Yağ", f"{toplam_yag:.1f} g")
         m5.metric("Lif", f"{toplam_lif:.1f} g")
 
+        # Makro Yüzde Hesapları
         kcal_cho = toplam_cho * 4
         kcal_prot = toplam_prot * 4
         kcal_yag = toplam_yag * 9
         toplam_makro_kcal = kcal_cho + kcal_prot + kcal_yag
 
-        st.markdown("##### 🔬 Klinik Nutrisyonel Değerlendirme")
-        c_k1, c_k2, c_k3, c_k4 = st.columns(4)
-        
+        yuzde_cho = (kcal_cho / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
+        yuzde_prot = (kcal_prot / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
+        yuzde_yag = (kcal_yag / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
         prot_per_kg = (toplam_prot / agirlik) if agirlik > 0 else 0
+
+        st.markdown("##### 🔬 Enerjinin Makro Dağılımı (% Enerji)")
+        c_k1, c_k2, c_k3, c_k4 = st.columns(4)
         c_k1.info(f"**Protein / kg:** {prot_per_kg:.2f} g/kg")
-
-        if toplam_makro_kcal > 0:
-            c_k2.metric("% CHO", f"%{(kcal_cho / toplam_makro_kcal)*100:.1f}")
-            c_k3.metric("% Protein", f"%{(kcal_prot / toplam_makro_kcal)*100:.1f}")
-            c_k4.metric("% Yağ", f"%{(kcal_yag / toplam_makro_kcal)*100:.1f}")
-
-        # Hedef Karşılama
-        if hedef_kcal > 0 or hedef_protein > 0:
-            st.markdown("##### 🎯 Hedef Karşılama")
-            c_h1, c_h2 = st.columns(2)
-            if hedef_kcal > 0:
-                oran_kcal = (toplam_kcal / hedef_kcal) * 100
-                c_h1.info(f"Enerji Karşılama: **%{oran_kcal:.1f}** ({toplam_kcal:.0f} / {hedef_kcal:.0f} kcal)")
-            if hedef_protein > 0:
-                oran_prot = (toplam_prot / hedef_protein) * 100
-                c_h2.info(f"Protein Karşılama: **%{oran_prot:.1f}** ({toplam_prot:.1f} / {hedef_protein:.1f} g)")
+        c_k2.metric("Karbonhidrat Payı", f"%{yuzde_cho:.1f}")
+        c_k3.metric("Protein Payı", f"%{yuzde_prot:.1f}")
+        c_k4.metric("Yağ Payı", f"%{yuzde_yag:.1f}")
 
         # Mikro Besin Tablosu
-        with st.expander("🔬 Tüm Mikro ve Diğer Besin Ögeleri Dökümü"):
-            haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)']
-            sayisal_sutunlar = [c for c in df_toplam.columns if c not in haric_kolonlar]
-            mikro_toplamlar = (df_toplam[sayisal_sutunlar].sum() / gun_sayisi).round(2).reset_index()
-            mikro_toplamlar.columns = ["Besin Ögesi", "Günlük Ortalama Miktar"]
+        haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)']
+        sayisal_sutunlar = [c for c in df_toplam.columns if c not in haric_kolonlar]
+        mikro_toplamlar = (df_toplam[sayisal_sutunlar].sum() / gun_sayisi).round(2).reset_index()
+        mikro_toplamlar.columns = ["Besin Ögesi", "Günlük Ortalama Miktar"]
+
+        with st.expander("🔬 Tüm Mikro ve Diğer Besin Ögeleri Dökümü", expanded=True):
             st.dataframe(mikro_toplamlar, use_container_width=True)
 
         st.markdown("---")
@@ -445,20 +439,22 @@ else:
         st.subheader("📥 Raporu Dışa Aktar")
         ozet_rapor_verisi = {
             "Hasta Kodu": hasta_no if hasta_no else "Belirtilmedi",
-            "Kayıt Modeli": st.session_state.mod,
-            "Ağırlık (kg)": agirlik,
-            "Ortalama Enerji (kcal)": f"{toplam_kcal:.1f}",
-            "Ortalama Protein (g)": f"{toplam_prot:.1f}",
-            "Protein/Ağırlık (g/kg)": f"{prot_per_kg:.2f}",
+            "Kayit Modeli": st.session_state.mod,
+            "Agirlik (kg)": agirlik,
+            "Toplam Enerji (kcal)": f"{toplam_kcal:.1f}",
+            "Protein (g)": f"{toplam_prot:.1f}",
+            "Protein / Agirlik (g/kg)": f"{prot_per_kg:.2f}",
             "Karbonhidrat (g)": f"{toplam_cho:.1f}",
-            "Yağ (g)": f"{toplam_yag:.1f}",
-            "Enerji Karşılama Oranı": f"%{(toplam_kcal / hedef_kcal)*100:.1f}" if hedef_kcal > 0 else "-",
-            "Protein Karşılama Oranı": f"%{(toplam_prot / hedef_protein)*100:.1f}" if hedef_protein > 0 else "-"
+            "Yag (g)": f"{toplam_yag:.1f}",
+            "Lif (g)": f"{toplam_lif:.1f}",
+            "Enerjinin CHO Payi (%)": f"%{yuzde_cho:.1f}",
+            "Enerjinin Protein Payi (%)": f"%{yuzde_prot:.1f}",
+            "Enerjinin Yag Payi (%)": f"%{yuzde_yag:.1f}"
         }
 
         col_d1, col_d2, col_d3 = st.columns([1.5, 1.5, 3])
         with col_d1:
-            excel_data = generate_excel(df_toplam, ozet_rapor_verisi)
+            excel_data = generate_excel(df_toplam, ozet_rapor_verisi, mikro_toplamlar)
             st.download_button(
                 label="📊 Excel Raporu İndir (.xlsx)",
                 data=excel_data,
@@ -467,7 +463,7 @@ else:
                 use_container_width=True
             )
         with col_d2:
-            pdf_data = generate_pdf(hasta_no, ozet_rapor_verisi, df_toplam)
+            pdf_data = generate_pdf(hasta_no, ozet_rapor_verisi, df_toplam, mikro_toplamlar)
             st.download_button(
                 label="📄 PDF Raporu İndir (.pdf)",
                 data=pdf_data,
