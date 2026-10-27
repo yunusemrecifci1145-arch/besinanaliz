@@ -94,11 +94,13 @@ def load_data():
     df['Besin Adı'] = df['Besin Adı'].astype(str).str.strip()
     df = df.drop_duplicates(subset=['Besin Adı'])
 
-    # GÜNCELLEME 3: Agresif veri tipi dönüşümü düzeltildi, güvenli liste genişletildi
+    # GÜNCELLEME: Akıllı veri tipi dönüşümü (Sadece sayıları sıfıra tamamlar, metinleri elden geçirmez)
     haric_tut = ['Besin Adı', 'Kategori', 'Kaynak Dosya', 'Birim', 'Ölçü Birimi', 'Alerjen Uyarısı', 'Not']
     for col in df.columns:
         if col not in haric_tut:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            converted = pd.to_numeric(df[col], errors='coerce')
+            if not converted.isna().all():
+                df[col] = converted.fillna(0)
 
     return df, 'Besin Adı'
 
@@ -141,7 +143,6 @@ def tr_fix(text):
     return s
 
 def generate_excel(df_data, ozet_dict, df_mikro, klinik_not):
-    # 'id' sütununu excel raporundan çıkaralım (görsel kirlilik yapmasın)
     df_data_export = df_data.drop(columns=['id'], errors='ignore')
     
     output = io.BytesIO()
@@ -159,7 +160,6 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro, klinik_not):
     secilen_font = "Helvetica"
     secilen_bold = "Helvetica-Bold"
 
-    # GÜNCELLEME 2: URL indirme hatası kaldırıldı, lokal font kontrolü eklendi
     try:
         if os.path.exists("Roboto-Regular.ttf") and os.path.exists("Roboto-Bold.ttf"):
             pdfmetrics.registerFont(TTFont('CustomTR', 'Roboto-Regular.ttf'))
@@ -388,7 +388,6 @@ else:
                 st.write("")
                 st.write("")
                 if st.button("➕ Ekle", key=f"btn_{secilen_gun}_{ogun}"):
-                    # GÜNCELLEME 5: Boş kayıt ekleme engeli
                     if secilen_besin == arama_placeholder:
                         st.warning("Lütfen eklemek için bir besin seçin!")
                     else:
@@ -396,11 +395,8 @@ else:
                         std_porsiyon = besin_verisi.get('Porsiyon (g)', 100.0)
                         
                         net_gram = (miktar_input * std_porsiyon) if tip == "Porsiyon" else miktar_input
-                        
-                        # 1. Maddedeki Risk (Excel değerleri 100 gram/ml baz alındığı varsayılıyor)
                         carpan = (net_gram / 100.0) * (yuzde / 100.0)
 
-                        # GÜNCELLEME 4: Silme işleminde karışıklık olmaması için UUID atama
                         hesaplanan = {
                             "id": str(uuid.uuid4()),  
                             "Gün": secilen_gun,
@@ -426,7 +422,6 @@ else:
                     k2.write(f"{item['Miktar (g/ml)']:.0f} g/ml (%{item['Tüketim (%)']})")
                     k3.write(f"{item.get('Kalori (kcal)', 0):.1f} kcal | {item.get('Protein (g)', 0):.1f} g prot")
                     
-                    # GÜNCELLEME 4: ID üzerinden güvenli silme işlemi
                     if k4.button("❌", key=f"del_{item['id']}"):
                         st.session_state.tuketim[secilen_gun][ogun] = [x for x in st.session_state.tuketim[secilen_gun][ogun] if x['id'] != item['id']]
                         st.rerun()
@@ -445,7 +440,6 @@ else:
         df_toplam = pd.DataFrame(tum_besinler)
         gun_sayisi = len(aktif_gunler)
 
-        # GÜNCELLEME 5: Sütun yoksa hata vermesini engelleyen güvenli hesaplamalar
         toplam_kcal = df_toplam['Kalori (kcal)'].sum() / gun_sayisi if 'Kalori (kcal)' in df_toplam.columns else 0
         toplam_cho = df_toplam['Karbonhidrat (g)'].sum() / gun_sayisi if 'Karbonhidrat (g)' in df_toplam.columns else 0
         toplam_prot = df_toplam['Protein (g)'].sum() / gun_sayisi if 'Protein (g)' in df_toplam.columns else 0
@@ -478,9 +472,9 @@ else:
         c_k3.metric("Protein Payı", f"%{yuzde_prot:.1f}")
         c_k4.metric("Yağ Payı", f"%{yuzde_yag:.1f}")
 
-        # Mikro Besin Tablosu (id sütunu haric_kolonlar'a eklendi)
+        # GÜNCELLEME: Sadece gerçek sayısal veri barındıran sütunları tabloya dahil et
         haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)', 'id']
-        sayisal_sutunlar = [c for c in df_toplam.columns if c not in haric_kolonlar]
+        sayisal_sutunlar = [c for c in df_toplam.select_dtypes(include=['number']).columns if c not in haric_kolonlar]
         mikro_toplamlar = (df_toplam[sayisal_sutunlar].sum() / gun_sayisi).round(2).reset_index()
         mikro_toplamlar.columns = ["Besin Ögesi", "Günlük Ortalama Miktar"]
 
