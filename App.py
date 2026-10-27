@@ -1,10 +1,16 @@
 import streamlit as st
 import pandas as pd
 import io
+import os
+import urllib.request
+
+# ReportLab ve PDF Kütüphaneleri
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # ==========================================
 # 1. SAYFA VE STİL AYARLARI
@@ -95,7 +101,7 @@ if "tuketim" not in st.session_state:
     }
 
 # ==========================================
-# 4. YARDIMCI FONKSİYONLAR (EXCEL & PDF)
+# 4. YARDIMCI FONKSİYONLAR (EXCEL & TÜRKÇE PDF)
 # ==========================================
 def generate_excel(df_data, ozet_dict):
     output = io.BytesIO()
@@ -106,15 +112,66 @@ def generate_excel(df_data, ozet_dict):
     return output.getvalue()
 
 def generate_pdf(hasta_kodu, ozet_dict, df_data):
+    # Türkçe harfleri destekleyen yazı tiplerini internetten otomatik çekiyoruz
+    font_normal = "DejaVuSans.ttf"
+    font_bold = "DejaVuSans-Bold.ttf"
+    
+    if not os.path.exists(font_normal):
+        urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", font_normal)
+    if not os.path.exists(font_bold):
+        urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", font_bold)
+        
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVuSans', font_normal))
+        pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', font_bold))
+        secilen_font = 'DejaVuSans'
+        secilen_bold = 'DejaVuSans-Bold'
+    except Exception:
+        secilen_font = 'Helvetica'
+        secilen_bold = 'Helvetica-Bold'
+
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, leading=20, textColor=colors.HexColor("#0f172a"), alignment=1)
-    sub_style = ParagraphStyle('SubStyle', parent=styles['Normal'], fontSize=9, leading=12, textColor=colors.HexColor("#64748b"), alignment=1)
-    head_style = ParagraphStyle('HeadStyle', parent=styles['Heading3'], fontSize=12, leading=15, textColor=colors.HexColor("#1e293b"))
-    body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontSize=8, leading=10)
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        fontName=secilen_bold,
+        fontSize=16,
+        leading=20,
+        textColor=colors.HexColor("#0f172a"),
+        alignment=1
+    )
+    sub_style = ParagraphStyle(
+        'SubStyle',
+        fontName=secilen_font,
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#64748b"),
+        alignment=1
+    )
+    head_style = ParagraphStyle(
+        'HeadStyle',
+        fontName=secilen_bold,
+        fontSize=12,
+        leading=15,
+        textColor=colors.HexColor("#1e293b")
+    )
+    cell_style = ParagraphStyle(
+        'CellStyle',
+        fontName=secilen_font,
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#0f172a")
+    )
+    cell_style_bold = ParagraphStyle(
+        'CellStyleBold',
+        fontName=secilen_bold,
+        fontSize=8,
+        leading=10,
+        textColor=colors.white
+    )
 
     elements.append(Paragraph("Klinik Besin Tüketim Raporu", title_style))
     elements.append(Paragraph("Geliştirici: Yunus Emre Çifçi - Beslenme ve Diyetetik", sub_style))
@@ -123,13 +180,11 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
     elements.append(Paragraph("Hasta & Değerlendirme Özeti", head_style))
     elements.append(Spacer(1, 6))
 
-    ozet_table_data = [[k, str(v)] for k, v in ozet_dict.items()]
+    ozet_table_data = [[Paragraph(k, cell_style), Paragraph(str(v), cell_style)] for k, v in ozet_dict.items()]
     t_ozet = Table(ozet_table_data, colWidths=[200, 300])
     t_ozet.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
         ('PADDING', (0, 0), (-1, -1), 4),
     ]))
     elements.append(t_ozet)
@@ -139,25 +194,26 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data):
     elements.append(Spacer(1, 6))
 
     temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns]
-    table_content = [temel_kolonlar]
+    
+    # Tablo Başlıkları
+    table_content = [[Paragraph(col, cell_style_bold) for col in temel_kolonlar]]
 
+    # Satırlar
     for _, row in df_data[temel_kolonlar].iterrows():
         row_vals = []
         for col in temel_kolonlar:
             val = row[col]
             if isinstance(val, float):
-                row_vals.append(f"{val:.1f}")
+                text_val = f"{val:.1f}"
             else:
-                row_vals.append(str(val)[:24])
+                text_val = str(val)[:24]
+            row_vals.append(Paragraph(text_val, cell_style))
         table_content.append(row_vals)
 
     col_widths = [50, 70, 180, 70, 70, 60] if 'Gün' in temel_kolonlar else [80, 200, 80, 80, 60]
     t_detay = Table(table_content, colWidths=col_widths)
     t_detay.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 7),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
         ('PADDING', (0, 0), (-1, -1), 3),
     ]))
