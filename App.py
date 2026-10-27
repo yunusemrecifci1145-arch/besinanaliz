@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import uuid
 
 # ReportLab ve PDF Kütüphaneleri
 from reportlab.lib.pagesizes import letter
@@ -93,8 +94,10 @@ def load_data():
     df['Besin Adı'] = df['Besin Adı'].astype(str).str.strip()
     df = df.drop_duplicates(subset=['Besin Adı'])
 
+    # GÜNCELLEME 3: Agresif veri tipi dönüşümü düzeltildi, güvenli liste genişletildi
+    haric_tut = ['Besin Adı', 'Kategori', 'Kaynak Dosya', 'Birim', 'Ölçü Birimi', 'Alerjen Uyarısı', 'Not']
     for col in df.columns:
-        if col not in ['Besin Adı', 'Kategori', 'Kaynak Dosya']:
+        if col not in haric_tut:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     return df, 'Besin Adı'
@@ -138,11 +141,14 @@ def tr_fix(text):
     return s
 
 def generate_excel(df_data, ozet_dict, df_mikro, klinik_not):
+    # 'id' sütununu excel raporundan çıkaralım (görsel kirlilik yapmasın)
+    df_data_export = df_data.drop(columns=['id'], errors='ignore')
+    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_ozet = pd.DataFrame(list(ozet_dict.items()), columns=["Parametre", "Değer"])
         df_ozet.to_excel(writer, sheet_name='Genel Özet', index=False)
-        df_data.to_excel(writer, sheet_name='Tüketim Detayı', index=False)
+        df_data_export.to_excel(writer, sheet_name='Tüketim Detayı', index=False)
         df_mikro.to_excel(writer, sheet_name='Mikro Besinler', index=False)
         if klinik_not.strip():
             pd.DataFrame([{"Klinik Not": klinik_not}]).to_excel(writer, sheet_name='Klinik Yorum', index=False)
@@ -150,25 +156,24 @@ def generate_excel(df_data, ozet_dict, df_mikro, klinik_not):
 
 def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro, klinik_not):
     font_secildi = False
-    linux_font_yollari = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
-    ]
-    
     secilen_font = "Helvetica"
     secilen_bold = "Helvetica-Bold"
 
-    for font_yolu in linux_font_yollari:
-        if os.path.exists(font_yolu):
-            try:
-                pdfmetrics.registerFont(TTFont('CustomTR', font_yolu))
-                secilen_font = 'CustomTR'
-                secilen_bold = 'CustomTR'
-                font_secildi = True
-                break
-            except Exception:
-                pass
+    # GÜNCELLEME 2: URL indirme hatası kaldırıldı, lokal font kontrolü eklendi
+    try:
+        if os.path.exists("Roboto-Regular.ttf") and os.path.exists("Roboto-Bold.ttf"):
+            pdfmetrics.registerFont(TTFont('CustomTR', 'Roboto-Regular.ttf'))
+            pdfmetrics.registerFont(TTFont('CustomTR-Bold', 'Roboto-Bold.ttf'))
+            secilen_font = 'CustomTR'
+            secilen_bold = 'CustomTR-Bold'
+            font_secildi = True
+        elif os.path.exists("DejaVuSans.ttf"):
+            pdfmetrics.registerFont(TTFont('CustomTR', 'DejaVuSans.ttf'))
+            secilen_font = 'CustomTR'
+            secilen_bold = 'CustomTR'
+            font_secildi = True
+    except Exception:
+        pass
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
@@ -211,7 +216,7 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro, klinik_not):
     elements.append(t_ozet)
     elements.append(Spacer(1, 10))
 
-    # Klinik Not (Varsa)
+    # Klinik Not
     if klinik_not.strip():
         elements.append(Paragraph(t_not_baslik, head_style))
         elements.append(Spacer(1, 4))
@@ -228,7 +233,7 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro, klinik_not):
     # Tüketilen Besinler Tablosu
     elements.append(Paragraph(t_detay_baslik, head_style))
     elements.append(Spacer(1, 4))
-    temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns]
+    temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns and c != 'id']
     table_content = []
     baslik_satiri = []
     for col in temel_kolonlar:
@@ -383,14 +388,21 @@ else:
                 st.write("")
                 st.write("")
                 if st.button("➕ Ekle", key=f"btn_{secilen_gun}_{ogun}"):
-                    if secilen_besin != arama_placeholder:
+                    # GÜNCELLEME 5: Boş kayıt ekleme engeli
+                    if secilen_besin == arama_placeholder:
+                        st.warning("Lütfen eklemek için bir besin seçin!")
+                    else:
                         besin_verisi = df[df[isim_sutunu] == secilen_besin].iloc[0].to_dict()
                         std_porsiyon = besin_verisi.get('Porsiyon (g)', 100.0)
                         
                         net_gram = (miktar_input * std_porsiyon) if tip == "Porsiyon" else miktar_input
+                        
+                        # 1. Maddedeki Risk (Excel değerleri 100 gram/ml baz alındığı varsayılıyor)
                         carpan = (net_gram / 100.0) * (yuzde / 100.0)
 
+                        # GÜNCELLEME 4: Silme işleminde karışıklık olmaması için UUID atama
                         hesaplanan = {
+                            "id": str(uuid.uuid4()),  
                             "Gün": secilen_gun,
                             "Öğün": ogun,
                             "Besin": secilen_besin,
@@ -408,13 +420,15 @@ else:
 
             # Eklenenleri Listele
             if st.session_state.tuketim[secilen_gun][ogun]:
-                for idx, item in enumerate(st.session_state.tuketim[secilen_gun][ogun]):
+                for item in list(st.session_state.tuketim[secilen_gun][ogun]):
                     k1, k2, k3, k4 = st.columns([4, 2, 2, 1])
                     k1.write(f"• **{item['Besin']}** ({item['Giriş Tipi']})")
                     k2.write(f"{item['Miktar (g/ml)']:.0f} g/ml (%{item['Tüketim (%)']})")
                     k3.write(f"{item.get('Kalori (kcal)', 0):.1f} kcal | {item.get('Protein (g)', 0):.1f} g prot")
-                    if k4.button("❌", key=f"del_{secilen_gun}_{ogun}_{idx}"):
-                        st.session_state.tuketim[secilen_gun][ogun].pop(idx)
+                    
+                    # GÜNCELLEME 4: ID üzerinden güvenli silme işlemi
+                    if k4.button("❌", key=f"del_{item['id']}"):
+                        st.session_state.tuketim[secilen_gun][ogun] = [x for x in st.session_state.tuketim[secilen_gun][ogun] if x['id'] != item['id']]
                         st.rerun()
 
     st.markdown("---")
@@ -431,12 +445,12 @@ else:
         df_toplam = pd.DataFrame(tum_besinler)
         gun_sayisi = len(aktif_gunler)
 
-        # Günlük Ortalamalar
-        toplam_kcal = df_toplam.get('Kalori (kcal)', pd.Series([0])).sum() / gun_sayisi
-        toplam_cho = df_toplam.get('Karbonhidrat (g)', pd.Series([0])).sum() / gun_sayisi
-        toplam_prot = df_toplam.get('Protein (g)', pd.Series([0])).sum() / gun_sayisi
-        toplam_yag = df_toplam.get('Yağ (g)', pd.Series([0])).sum() / gun_sayisi
-        toplam_lif = df_toplam.get('Lif (g)', pd.Series([0])).sum() / gun_sayisi
+        # GÜNCELLEME 5: Sütun yoksa hata vermesini engelleyen güvenli hesaplamalar
+        toplam_kcal = df_toplam['Kalori (kcal)'].sum() / gun_sayisi if 'Kalori (kcal)' in df_toplam.columns else 0
+        toplam_cho = df_toplam['Karbonhidrat (g)'].sum() / gun_sayisi if 'Karbonhidrat (g)' in df_toplam.columns else 0
+        toplam_prot = df_toplam['Protein (g)'].sum() / gun_sayisi if 'Protein (g)' in df_toplam.columns else 0
+        toplam_yag = df_toplam['Yağ (g)'].sum() / gun_sayisi if 'Yağ (g)' in df_toplam.columns else 0
+        toplam_lif = df_toplam['Lif (g)'].sum() / gun_sayisi if 'Lif (g)' in df_toplam.columns else 0
 
         st.subheader("📊 Günlük Ortalama Tüketim & Makro Dağılımı")
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -464,8 +478,8 @@ else:
         c_k3.metric("Protein Payı", f"%{yuzde_prot:.1f}")
         c_k4.metric("Yağ Payı", f"%{yuzde_yag:.1f}")
 
-        # Mikro Besin Tablosu
-        haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)']
+        # Mikro Besin Tablosu (id sütunu haric_kolonlar'a eklendi)
+        haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)', 'id']
         sayisal_sutunlar = [c for c in df_toplam.columns if c not in haric_kolonlar]
         mikro_toplamlar = (df_toplam[sayisal_sutunlar].sum() / gun_sayisi).round(2).reset_index()
         mikro_toplamlar.columns = ["Besin Ögesi", "Günlük Ortalama Miktar"]
