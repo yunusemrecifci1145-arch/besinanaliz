@@ -12,13 +12,12 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # ==========================================
-# 1. SAYFA VE STİL AYARLARI (Koyu/Açık Mod Uyumlu)
+# 1. SAYFA VE STİL AYARLARI
 # ==========================================
 st.set_page_config(page_title="Klinik Besin Tüketim Analizi", layout="wide", page_icon="🥗")
 
 st.markdown("""
 <style>
-    /* Hem açık hem koyu modda mobil uyumlu footer */
     .footer-box {
         margin-top: 50px;
         padding: 24px;
@@ -44,15 +43,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. VERİ YÜKLEME VE DÜZENLEME
+# 2. VERİ YÜKLEME VE ÇİFT EXCEL BİRLEŞTİRME
 # ==========================================
 @st.cache_data
 def load_data():
-    try:
-        df = pd.read_excel('besinler.xlsx')
-    except Exception as e:
-        st.error(f"Excel yüklenirken hata oluştu: {e}")
+    dfs = []
+    
+    # 1. Standart Besinler Excel'i
+    if os.path.exists('besinler.xlsx'):
+        try:
+            df_b = pd.read_excel('besinler.xlsx')
+            df_b['Ürün Türü'] = 'Normal Besin'
+            dfs.append(df_b)
+        except Exception as e:
+            st.warning(f"besinler.xlsx okunurken hata: {e}")
+
+    # 2. Medikal / Enteral Mamalar Excel'i
+    if os.path.exists('enteral.xlsx'):
+        try:
+            df_e = pd.read_excel('enteral.xlsx')
+            df_e['Ürün Türü'] = 'Enteral / ONS'
+            dfs.append(df_e)
+        except Exception as e:
+            st.warning(f"enteral.xlsx okunurken hata: {e}")
+
+    if not dfs:
+        st.error("Besin veri tabanı bulunamadı! Lütfen 'besinler.xlsx' dosyasını yükleyin.")
         return None, None
+
+    df = pd.concat(dfs, ignore_index=True)
 
     isim_serisi = df['Besin Adı'].fillna(df.get('Yemek Adı', pd.Series(dtype=object))).fillna(df.get('Ürün Adı', pd.Series(dtype=object)))
     df['Besin Adı'] = isim_serisi
@@ -77,7 +96,7 @@ def load_data():
     df = df.drop_duplicates(subset=['Besin Adı'])
 
     for col in df.columns:
-        if col not in ['Besin Adı', 'Kategori', 'Kaynak Dosya']:
+        if col not in ['Besin Adı', 'Kategori', 'Kaynak Dosya', 'Ürün Türü']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     return df, 'Besin Adı'
@@ -101,6 +120,9 @@ if "tuketim" not in st.session_state:
         "Gün 3": {ogun: [] for ogun in ogunler}
     }
 
+if "su_tuketimi" not in st.session_state:
+    st.session_state.su_tuketimi = 1500
+
 # ==========================================
 # 4. YARDIMCI FONKSİYONLAR (EXCEL & PDF)
 # ==========================================
@@ -120,16 +142,21 @@ def tr_fix(text):
         s = s.replace(tr, eng)
     return s
 
-def generate_excel(df_data, ozet_dict, df_mikro):
+def generate_excel(df_data, ozet_dict, df_mikro, df_ogun, klinik_not):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_ozet = pd.DataFrame(list(ozet_dict.items()), columns=["Parametre", "Değer"])
         df_ozet.to_excel(writer, sheet_name='Genel Özet', index=False)
+        df_ogun.to_excel(writer, sheet_name='Öğün Dağılımı', index=False)
         df_data.to_excel(writer, sheet_name='Tüketim Detayı', index=False)
         df_mikro.to_excel(writer, sheet_name='Mikro Besinler', index=False)
+        
+        if klinik_not:
+            df_not = pd.DataFrame([{"Diyetisyen Klinik Notu & Değerlendirmesi": klinik_not}])
+            df_not.to_excel(writer, sheet_name='Klinik Yorum', index=False)
     return output.getvalue()
 
-def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
+def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro, df_ogun, klinik_not):
     font_secildi = False
     linux_font_yollari = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -156,25 +183,28 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('TitleStyle', fontName=secilen_bold, fontSize=16, leading=20, textColor=colors.HexColor("#0f172a"), alignment=1)
-    sub_style = ParagraphStyle('SubStyle', fontName=secilen_font, fontSize=9, leading=12, textColor=colors.HexColor("#64748b"), alignment=1)
-    head_style = ParagraphStyle('HeadStyle', fontName=secilen_bold, fontSize=11, leading=14, textColor=colors.HexColor("#1e293b"))
-    cell_style = ParagraphStyle('CellStyle', fontName=secilen_font, fontSize=8, leading=10, textColor=colors.HexColor("#0f172a"))
-    cell_style_bold = ParagraphStyle('CellStyleBold', fontName=secilen_bold, fontSize=8, leading=10, textColor=colors.white)
+    title_style = ParagraphStyle('TitleStyle', fontName=secilen_bold, fontSize=15, leading=18, textColor=colors.HexColor("#0f172a"), alignment=1)
+    sub_style = ParagraphStyle('SubStyle', fontName=secilen_font, fontSize=8, leading=11, textColor=colors.HexColor("#64748b"), alignment=1)
+    head_style = ParagraphStyle('HeadStyle', fontName=secilen_bold, fontSize=10, leading=13, textColor=colors.HexColor("#1e293b"))
+    cell_style = ParagraphStyle('CellStyle', fontName=secilen_font, fontSize=7.5, leading=9.5, textColor=colors.HexColor("#0f172a"))
+    cell_style_bold = ParagraphStyle('CellStyleBold', fontName=secilen_bold, fontSize=7.5, leading=9.5, textColor=colors.white)
+    not_style = ParagraphStyle('NotStyle', fontName=secilen_font, fontSize=8, leading=11, textColor=colors.HexColor("#334155"))
 
     t_baslik = "Klinik Besin Tuketim Raporu" if not font_secildi else "Klinik Besin Tüketim Raporu"
     t_yazar = "Gelistirici: Yunus Emre Cifci - Beslenme ve Diyetetik" if not font_secildi else "Geliştirici: Yunus Emre Çifçi - Beslenme ve Diyetetik"
     t_ozet_baslik = "Hasta & Makro Besin Dagilim Ozeti" if not font_secildi else "Hasta & Makro Besin Dağılım Özeti"
+    t_ogun_baslik = "Ogun Bazli Kalori ve Protein Dagilimi" if not font_secildi else "Öğün Bazlı Kalori ve Protein Dağılımı"
     t_detay_baslik = "Tuketilen Besinler ve Dagilim" if not font_secildi else "Tüketilen Besinler ve Dağılım"
     t_mikro_baslik = "Gunluk Toplam Mikro ve Diger Besin Ogeleri Dokumu" if not font_secildi else "Günlük Toplam Mikro ve Diğer Besin Ögeleri Dökümü"
+    t_not_baslik = "Diyetisyen Klinik Notu / Nutrisyonel Oneri" if not font_secildi else "Diyetisyen Klinik Notu / Nutrisyonel Öneri"
 
     elements.append(Paragraph(t_baslik, title_style))
     elements.append(Paragraph(t_yazar, sub_style))
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
+    # 1. Özet Tablosu
     elements.append(Paragraph(t_ozet_baslik, head_style))
-    elements.append(Spacer(1, 5))
-
+    elements.append(Spacer(1, 4))
     ozet_table_data = []
     for k, v in ozet_dict.items():
         k_metin = k if font_secildi else tr_fix(k)
@@ -185,14 +215,53 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     t_ozet.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ('PADDING', (0, 0), (-1, -1), 3),
+        ('PADDING', (0, 0), (-1, -1), 2.5),
     ]))
     elements.append(t_ozet)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
+    # 2. Öğün Dağılımı Tablosu
+    elements.append(Paragraph(t_ogun_baslik, head_style))
+    elements.append(Spacer(1, 4))
+    ogun_table_data = [[
+        Paragraph("<b>Öğün</b>" if font_secildi else "<b>Ogun</b>", cell_style_bold),
+        Paragraph("<b>Enerji (kcal)</b>", cell_style_bold),
+        Paragraph("<b>Enerji Payı (%)</b>" if font_secildi else "<b>Enerji Payi (%)</b>", cell_style_bold),
+        Paragraph("<b>Protein (g)</b>", cell_style_bold)
+    ]]
+    for _, r in df_ogun.iterrows():
+        ogun_table_data.append([
+            Paragraph(str(r["Öğün"]) if font_secildi else tr_fix(r["Öğün"]), cell_style),
+            Paragraph(f"{r['Enerji (kcal)']:.1f}", cell_style),
+            Paragraph(f"%{r['Enerji Payı (%)']:.1f}", cell_style),
+            Paragraph(f"{r['Protein (g)']:.1f} g", cell_style)
+        ])
+    t_ogun = Table(ogun_table_data, colWidths=[150, 110, 120, 120])
+    t_ogun.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#475569")),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ('PADDING', (0, 0), (-1, -1), 2.5),
+    ]))
+    elements.append(t_ogun)
+    elements.append(Spacer(1, 10))
+
+    # 3. Klinik Değerlendirme Notu (Varsa)
+    if klinik_not.strip():
+        elements.append(Paragraph(t_not_baslik, head_style))
+        elements.append(Spacer(1, 4))
+        p_not = Paragraph(klinik_not if font_secildi else tr_fix(klinik_not), not_style)
+        t_not = Table([[p_not]], colWidths=[500])
+        t_not.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor("#94a3b8")),
+            ('PADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(t_not)
+        elements.append(Spacer(1, 10))
+
+    # 4. Tüketilen Besinler Tablosu
     elements.append(Paragraph(t_detay_baslik, head_style))
-    elements.append(Spacer(1, 5))
-
+    elements.append(Spacer(1, 4))
     temel_kolonlar = [c for c in ['Gün', 'Öğün', 'Besin', 'Miktar (g/ml)', 'Kalori (kcal)', 'Protein (g)'] if c in df_data.columns]
     table_content = []
     baslik_satiri = []
@@ -215,14 +284,14 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     t_detay.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0f172a")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-        ('PADDING', (0, 0), (-1, -1), 3),
+        ('PADDING', (0, 0), (-1, -1), 2.5),
     ]))
     elements.append(t_detay)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
+    # 5. Mikro Besin Tablosu
     elements.append(Paragraph(t_mikro_baslik, head_style))
-    elements.append(Spacer(1, 5))
-
+    elements.append(Spacer(1, 4))
     mikro_rows = []
     for _, r in df_mikro.iterrows():
         ad = str(r["Besin Ögesi"]) if font_secildi else tr_fix(r["Besin Ögesi"])
@@ -240,7 +309,6 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     for i in range(yarisi):
         sol_ad, sol_deg = mikro_rows[i]
         sag_ad, sag_deg = mikro_rows[i + yarisi] if (i + yarisi) < len(mikro_rows) else ("", "")
-        
         mikro_tablo_data.append([
             Paragraph(sol_ad, cell_style),
             Paragraph(sol_deg, cell_style),
@@ -252,7 +320,7 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
     t_mikro.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#334155")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ('PADDING', (0, 0), (-1, -1), 2.5),
+        ('PADDING', (0, 0), (-1, -1), 2),
     ]))
     elements.append(t_mikro)
 
@@ -264,7 +332,7 @@ def generate_pdf(hasta_kodu, ozet_dict, df_data, df_mikro):
 # ==========================================
 if st.session_state.mod is None:
     st.markdown("<h1 style='text-align: center;'>🥗 Klinik Besin Tüketim Analizi</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; opacity: 0.8; font-size: 16px;'>Diyetisyenler, stajyerler ve beslenme uzmanları için geliştirilmiş hızlı tüketim analizi aracı.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; opacity: 0.8; font-size: 16px;'>Diyetisyenler, stajyerler ve beslenme uzmanları için geliştirilmiş hızlı klinik tüketim analizi aracı.</p>", unsafe_allow_html=True)
     st.write("")
 
     col_box1, col_box2, col_box3 = st.columns([1, 4, 1])
@@ -272,7 +340,8 @@ if st.session_state.mod is None:
         st.info("""
         Bu sistem üzerinden herhangi bir **üyelik oluşturmadan ve tamamen ücretsiz** olarak hastalarınızın veya danışanlarınızın 1 ya da 3 günlük besin tüketim kayıtlarını pratik bir şekilde girebilirsiniz.
         
-        * Girilen besinlerin enerji, makro öge dağılımlarını ve mikro besin detaylarını anlık olarak hesaplar.
+        * Normal besinlerin yanı sıra medikal nutrisyonel destekleri (Enteral / ONS mamalarını) entegre hesaplar.
+        * Girilen tüketimin enerji, makro öge dağılımlarını, öğün içi paylarını ve mikro besin detaylarını anlık analiz eder.
         * Sonuçları resmi klinik formata uygun **PDF Raporu** veya **Excel (.xlsx)** belgesi olarak tek tıkla indirmenizi sağlar.
         * 🔒 *Hasta ve tüketim verileri hiçbir harici sunucuya kaydedilmez, sadece tarayıcınız açıkken bellekte tutulur.*
         """)
@@ -301,26 +370,59 @@ else:
             st.session_state.mod = None
             st.rerun()
 
-    # Hasta Bilgileri
-    col_h1, col_h2 = st.columns(2)
+    # Hasta & Hidrasyon Bilgileri
+    col_h1, col_h2, col_h3 = st.columns(3)
     with col_h1:
         hasta_no = st.text_input("Hasta No / Ad-Soyad", placeholder="Örn: G-101 / Servis")
     with col_h2:
-        agirlik = st.number_input("Ağırlık (kg)", min_value=0.0, value=70.0, step=1.0)
+        agirlik = st.number_input("Vücut Ağırlığı (kg)", min_value=1.0, value=70.0, step=1.0)
+    with col_h3:
+        st.session_state.su_tuketimi = st.number_input("Günlük Sıvı / Su Tüketimi (ml)", min_value=0, value=st.session_state.su_tuketimi, step=100)
 
     st.markdown("---")
 
     aktif_gunler = ["Gün 1"] if st.session_state.mod == "1 Günlük" else ["Gün 1", "Gün 2", "Gün 3"]
     secilen_gun = st.radio("Kayıt Yapılacak Günü Seçin:", aktif_gunler, horizontal=True) if st.session_state.mod == "3 Günlük" else "Gün 1"
 
-    # Arama placeholder'ı güncellendi
+    # Filtreleme & Kategori Seçimi
+    filtre_col1, filtre_col2 = st.columns([1, 3])
+    with filtre_col1:
+        mevcut_turler = ["Tümü"] + sorted(list(df['Ürün Türü'].unique())) if 'Ürün Türü' in df.columns else ["Tümü"]
+        secilen_tur = st.selectbox("Besin Türü Filtresi", options=mevcut_turler)
+
+    df_filtrelenmis = df if secilen_tur == "Tümü" else df[df['Ürün Türü'] == secilen_tur]
     arama_placeholder = "Seçiniz veya aramak için yazınız..."
-    besin_listesi = [arama_placeholder] + sorted(df[isim_sutunu].tolist())
+    besin_listesi = [arama_placeholder] + sorted(df_filtrelenmis[isim_sutunu].tolist())
 
     # Öğün Blokları
     for ogun in ogunler:
         ekli_sayi = len(st.session_state.tuketim[secilen_gun][ogun])
         with st.expander(f"🍽️ {ogun} ({ekli_sayi} besin eklendi)", expanded=False):
+            
+            # Hızlı Şablon Butonu (Sadece Kahvaltıda)
+            if ogun == "Kahvaltı":
+                if st.button("⚡ Hızlı Standart Kahvaltı Ekle (Yumurta, Peynir, Zeytin, Ekmek)", key="btn_hizli_kahvalti"):
+                    sablon_besinler = ["Yumurta", "Beyaz Peynir", "Zeytin", "Ekmek"]
+                    for sb in sablon_besinler:
+                        eslesen = df[df[isim_sutunu].str.contains(sb, case=False, na=False)]
+                        if not eslesen.empty:
+                            b_row = eslesen.iloc[0].to_dict()
+                            std_p = b_row.get('Porsiyon (g)', 50.0)
+                            carpan = (std_p / 100.0)
+                            yeni_giris = {
+                                "Gün": secilen_gun,
+                                "Öğün": ogun,
+                                "Besin": b_row[isim_sutunu],
+                                "Giriş Tipi": "1 Porsiyon (Hızlı)",
+                                "Miktar (g/ml)": std_p,
+                                "Tüketim (%)": 100
+                            }
+                            for k, v in b_row.items():
+                                if isinstance(v, (int, float)):
+                                    yeni_giris[k] = v * carpan
+                            st.session_state.tuketim[secilen_gun][ogun].append(yeni_giris)
+                    st.rerun()
+
             c_besin, c_tip, c_miktar, c_yuzde, c_btn = st.columns([2.8, 1.2, 1.2, 1.8, 0.8])
             
             with c_besin:
@@ -336,7 +438,6 @@ else:
                     miktar_input = st.number_input("Miktar (g / ml)", min_value=1.0, value=100.0, step=10.0, key=f"mkt_{secilen_gun}_{ogun}")
 
             with c_yuzde:
-                # 1'er adım esnek tüketim slider'ı
                 yuzde = st.slider(
                     "Tüketim Miktarı (%):",
                     min_value=5,
@@ -414,7 +515,7 @@ else:
         m4.metric("Yağ", f"{toplam_yag:.1f} g")
         m5.metric("Lif", f"{toplam_lif:.1f} g")
 
-        # Makro Yüzde Hesapları
+        # Makro & Klinik Hesaplar
         kcal_cho = toplam_cho * 4
         kcal_prot = toplam_prot * 4
         kcal_yag = toplam_yag * 9
@@ -423,23 +524,51 @@ else:
         yuzde_cho = (kcal_cho / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
         yuzde_prot = (kcal_prot / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
         yuzde_yag = (kcal_yag / toplam_makro_kcal * 100) if toplam_makro_kcal > 0 else 0
+        
         prot_per_kg = (toplam_prot / agirlik) if agirlik > 0 else 0
+        su_per_kg = (st.session_state.su_tuketimi / agirlik) if agirlik > 0 else 0
 
-        st.markdown("##### 🔬 Enerjinin Makro Dağılımı (% Enerji)")
+        st.markdown("##### 🔬 Klinik Nutrisyonel Göstergeler")
         c_k1, c_k2, c_k3, c_k4 = st.columns(4)
-        c_k1.info(f"**Protein / kg:** {prot_per_kg:.2f} g/kg")
-        c_k2.metric("Karbonhidrat Payı", f"%{yuzde_cho:.1f}")
-        c_k3.metric("Protein Payı", f"%{yuzde_prot:.1f}")
-        c_k4.metric("Yağ Payı", f"%{yuzde_yag:.1f}")
+        c_k1.info(f"**Protein / Ağırlık:** {prot_per_kg:.2f} g/kg")
+        c_k2.metric("Enerjinin CHO Payı", f"%{yuzde_cho:.1f}")
+        c_k3.metric("Enerjinin Protein Payı", f"%{yuzde_prot:.1f}")
+        c_k4.metric("Enerjinin Yağ Payı", f"%{yuzde_yag:.1f}")
+
+        st.markdown("##### 💧 Hidrasyon Durumu")
+        hid_col1, hid_col2 = st.columns(2)
+        hid_col1.info(f"**Günlük Tüketilen Sıvı:** {st.session_state.su_tuketimi} ml ({su_per_kg:.1f} ml/kg)")
+        hid_col2.caption("Klinik pratikte yetişkin bireyler için önerilen referans hidrasyon hedefi: ~30-35 ml/kg/gün.")
+
+        # Öğün Dağılım Tablosu
+        st.markdown("##### 🕒 Öğün Bazlı Enerji ve Protein Dağılımı")
+        ogun_gruplu = df_toplam.groupby('Öğün').agg({
+            'Kalori (kcal)': 'sum',
+            'Protein (g)': 'sum'
+        }).reindex(ogunler).fillna(0) / gun_sayisi
+        
+        ogun_gruplu['Enerji Payı (%)'] = (ogun_gruplu['Kalori (kcal)'] / toplam_kcal * 100) if toplam_kcal > 0 else 0
+        ogun_gruplu = ogun_gruplu.round(1).reset_index()
+        ogun_gruplu.columns = ["Öğün", "Enerji (kcal)", "Protein (g)", "Enerji Payı (%)"]
+        st.dataframe(ogun_gruplu, use_container_width=True)
 
         # Mikro Besin Tablosu
-        haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)']
+        haric_kolonlar = ['Gün', 'Öğün', 'Besin', 'Giriş Tipi', 'Miktar (g/ml)', 'Tüketim (%)', 'Besin Adı', 'Kategori', 'Kaynak Dosya', 'Porsiyon (g)', 'Ürün Türü']
         sayisal_sutunlar = [c for c in df_toplam.columns if c not in haric_kolonlar]
         mikro_toplamlar = (df_toplam[sayisal_sutunlar].sum() / gun_sayisi).round(2).reset_index()
         mikro_toplamlar.columns = ["Besin Ögesi", "Günlük Ortalama Miktar"]
 
-        with st.expander("🔬 Tüm Mikro ve Diğer Besin Ögeleri Dökümü", expanded=True):
+        with st.expander("🔬 Tüm Mikro ve Diğer Besin Ögeleri Dökümü", expanded=False):
             st.dataframe(mikro_toplamlar, use_container_width=True)
+
+        st.markdown("---")
+
+        # Diyetisyen Klinik Notu
+        st.subheader("📝 Diyetisyen Klinik Değerlendirme & Öneri Notu")
+        klinik_notu = st.text_area(
+            "Epikriz, ONS / mama önerisi veya beslenme tedavi planı notunu buraya yazabilirsiniz (PDF ve Excel'e eklenecektir):",
+            placeholder="Örn: Hasta günlük enerji gereksiniminin %60'ını karşılayabilmiş olup oral alımı kısıtlıdır. Standart ONS (1.5 kcal/ml, 2x200 ml) başlanması ve 48 saat sonra tüketim kaydının yinelenmesi uygundur."
+        )
 
         st.markdown("---")
 
@@ -449,6 +578,7 @@ else:
             "Hasta Kodu": hasta_no if hasta_no else "Belirtilmedi",
             "Kayit Modeli": st.session_state.mod,
             "Agirlik (kg)": agirlik,
+            "Sivi Tuketimi (ml)": f"{st.session_state.su_tuketimi} ml ({su_per_kg:.1f} ml/kg)",
             "Toplam Enerji (kcal)": f"{toplam_kcal:.1f}",
             "Protein (g)": f"{toplam_prot:.1f}",
             "Protein / Agirlik (g/kg)": f"{prot_per_kg:.2f}",
@@ -462,7 +592,7 @@ else:
 
         col_d1, col_d2, col_d3 = st.columns([1.5, 1.5, 3])
         with col_d1:
-            excel_data = generate_excel(df_toplam, ozet_rapor_verisi, mikro_toplamlar)
+            excel_data = generate_excel(df_toplam, ozet_rapor_verisi, mikro_toplamlar, ogun_gruplu, klinik_notu)
             st.download_button(
                 label="📊 Excel Raporu İndir (.xlsx)",
                 data=excel_data,
@@ -471,7 +601,7 @@ else:
                 use_container_width=True
             )
         with col_d2:
-            pdf_data = generate_pdf(hasta_no, ozet_rapor_verisi, df_toplam, mikro_toplamlar)
+            pdf_data = generate_pdf(hasta_no, ozet_rapor_verisi, df_toplam, mikro_toplamlar, ogun_gruplu, klinik_notu)
             st.download_button(
                 label="📄 PDF Raporu İndir (.pdf)",
                 data=pdf_data,
@@ -487,6 +617,7 @@ else:
                     "Gün 2": {ogun: [] for ogun in ogunler},
                     "Gün 3": {ogun: [] for ogun in ogunler}
                 }
+                st.session_state.su_tuketimi = 1500
                 st.rerun()
     else:
         st.info("Henüz hiçbir öğüne besin eklenmedi. Yukarıdaki öğün sekmelerini açarak besin ekleyebilirsiniz.")
